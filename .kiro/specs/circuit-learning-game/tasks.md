@@ -35,7 +35,7 @@
   - Write tests for rendering accuracy and performance
   - _Requirements: 1.1, 1.3_
 
-- [ ] 6. Build wire connection system
+- [x] 6. Build wire connection system
   - Implement connection points (terminals) on components
   - Create wire drawing functionality with mouse interactions
   - Add connection validation to prevent invalid connections

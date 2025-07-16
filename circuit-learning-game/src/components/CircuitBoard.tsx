@@ -1,18 +1,22 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
-import type { Position, ComponentType } from '../types';
+import type { Position, ComponentType, Connection } from '../types';
 import type { IElectricalComponent } from '../types/components';
 import { ComponentRenderer, type RenderingContext } from '../services/ComponentRenderer';
+import { ConnectionManager, type ConnectionPoint } from '../services/ConnectionManager';
 
 export interface CircuitBoardProps {
   width?: number;
   height?: number;
   gridSize?: number;
   components?: IElectricalComponent[];
+  connections?: Connection[];
   onCanvasClick?: (position: Position, component?: IElectricalComponent) => void;
   onCanvasMouseMove?: (position: Position) => void;
   onComponentDrop?: (componentType: ComponentType, componentId: string, position: Position) => void;
   onComponentSelect?: (componentId: string) => void;
   onComponentDeselect?: (componentId: string) => void;
+  onConnectionCreate?: (connection: Connection) => void;
+  onConnectionDelete?: (connectionId: string) => void;
 }
 
 export interface GridCoordinates {
@@ -25,17 +29,22 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
   height = 600,
   gridSize = 20,
   components = [],
+  connections = [],
   onCanvasClick,
   onCanvasMouseMove,
   onComponentDrop,
   onComponentSelect,
   onComponentDeselect,
+  onConnectionCreate,
+  onConnectionDelete,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<ComponentRenderer>(new ComponentRenderer());
+  const connectionManagerRef = useRef<ConnectionManager>(new ConnectionManager());
   const [mousePosition, setMousePosition] = useState<Position>({ x: 0, y: 0 });
   const [isDragOver, setIsDragOver] = useState(false);
   const [dragPosition, setDragPosition] = useState<Position | null>(null);
+  const [isWireMode, setIsWireMode] = useState(false);
 
   // Convert canvas coordinates to grid coordinates
   const canvasToGrid = useCallback((canvasPos: Position): GridCoordinates => {
@@ -124,10 +133,73 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
     ctx.fillRect(snappedPos.x, snappedPos.y, gridSize, gridSize);
   }, [snapToGrid, gridSize]);
 
+  // Draw connections (wires)
+  const drawConnections = useCallback((ctx: CanvasRenderingContext2D) => {
+    connections.forEach(connection => {
+      const fromComponent = components.find(c => c.id === connection.fromComponent);
+      const toComponent = components.find(c => c.id === connection.toComponent);
+      
+      if (!fromComponent || !toComponent) return;
+      
+      const fromTerminal = fromComponent.terminals.find(t => t.id === connection.fromTerminal);
+      const toTerminal = toComponent.terminals.find(t => t.id === connection.toTerminal);
+      
+      if (!fromTerminal || !toTerminal) return;
+      
+      // Draw wire
+      ctx.strokeStyle = '#28a745';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(fromTerminal.position.x, fromTerminal.position.y);
+      ctx.lineTo(toTerminal.position.x, toTerminal.position.y);
+      ctx.stroke();
+    });
+  }, [connections, components]);
+
+  // Draw wire preview during drawing
+  const drawWirePreview = useCallback((ctx: CanvasRenderingContext2D) => {
+    const wireState = connectionManagerRef.current.getWireDrawingState();
+    
+    if (!wireState.isDrawing || !wireState.startPoint || !wireState.currentMousePosition) {
+      return;
+    }
+    
+    // Draw preview wire
+    ctx.strokeStyle = '#ffc107';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+    
+    ctx.beginPath();
+    ctx.moveTo(wireState.startPoint.position.x, wireState.startPoint.position.y);
+    ctx.lineTo(wireState.currentMousePosition.x, wireState.currentMousePosition.y);
+    ctx.stroke();
+    
+    ctx.setLineDash([]); // Reset line dash
+  }, []);
+
   // Handle mouse click
   const handleMouseClick = useCallback((event: MouseEvent) => {
     const canvasPos = getCanvasMousePosition(event);
     const snappedPos = snapToGrid(canvasPos);
+    
+    // Check if click is on a terminal for wire drawing
+    const clickedTerminal = connectionManagerRef.current.findTerminalAtPosition(components, canvasPos);
+    
+    if (clickedTerminal && isWireMode) {
+      const wireState = connectionManagerRef.current.getWireDrawingState();
+      
+      if (!wireState.isDrawing) {
+        // Start wire drawing from this terminal
+        connectionManagerRef.current.startWireDrawing(clickedTerminal);
+      } else {
+        // Complete wire drawing to this terminal
+        const newConnection = connectionManagerRef.current.completeWireDrawing(clickedTerminal, components);
+        if (newConnection && onConnectionCreate) {
+          onConnectionCreate(newConnection);
+        }
+      }
+      return;
+    }
     
     // Check if click is on a component
     const clickedComponent = rendererRef.current.getComponentAtPosition(components, canvasPos);
@@ -149,14 +221,17 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
         onComponentSelect?.(clickedComponent.id);
       }
     } else {
-      // Click on empty space - clear selection
+      // Click on empty space - clear selection and cancel wire drawing
       rendererRef.current.clearSelection();
+      if (connectionManagerRef.current.getWireDrawingState().isDrawing) {
+        connectionManagerRef.current.cancelWireDrawing();
+      }
     }
     
     if (onCanvasClick) {
       onCanvasClick(snappedPos, clickedComponent || undefined);
     }
-  }, [getCanvasMousePosition, snapToGrid, onCanvasClick, components, onComponentSelect, onComponentDeselect]);
+  }, [getCanvasMousePosition, snapToGrid, onCanvasClick, components, onComponentSelect, onComponentDeselect, isWireMode, onConnectionCreate]);
 
   // Handle mouse move
   const handleMouseMove = useCallback((event: MouseEvent) => {
@@ -164,6 +239,11 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
     const snappedPos = snapToGrid(canvasPos);
     
     setMousePosition(snappedPos);
+    
+    // Update wire drawing if in progress
+    if (connectionManagerRef.current.getWireDrawingState().isDrawing) {
+      connectionManagerRef.current.updateWireDrawing(canvasPos);
+    }
     
     if (onCanvasMouseMove) {
       onCanvasMouseMove(snappedPos);
@@ -255,6 +335,9 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
     ctx.clearRect(0, 0, width, height);
     drawGrid(ctx);
 
+    // Draw connections first (behind components)
+    drawConnections(ctx);
+
     // Render components
     const renderingContext: RenderingContext = {
       ctx,
@@ -263,6 +346,9 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
     };
     
     rendererRef.current.renderComponents(components, renderingContext);
+
+    // Draw wire preview if drawing
+    drawWirePreview(ctx);
 
     // Draw drop zone if dragging
     if (isDragOver && dragPosition) {
@@ -287,23 +373,41 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
       canvas.removeEventListener('dragleave', handleDragLeave);
       canvas.removeEventListener('drop', handleDrop);
     };
-  }, [width, height, drawGrid, handleMouseClick, handleMouseMove, handleMouseHover, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, isDragOver, dragPosition, drawDropZone, components, gridSize]);
+  }, [width, height, drawGrid, drawConnections, drawWirePreview, handleMouseClick, handleMouseMove, handleMouseHover, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, isDragOver, dragPosition, drawDropZone, components, gridSize]);
 
   return (
     <div className="circuit-board-container">
+      <div className="circuit-board-controls" style={{ marginBottom: '8px' }}>
+        <button
+          onClick={() => setIsWireMode(!isWireMode)}
+          style={{
+            padding: '8px 16px',
+            backgroundColor: isWireMode ? '#007bff' : '#6c757d',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '14px'
+          }}
+          data-testid="wire-mode-toggle"
+        >
+          {isWireMode ? 'Exit Wire Mode' : 'Wire Mode'}
+        </button>
+      </div>
       <canvas
         ref={canvasRef}
         width={width}
         height={height}
         style={{
           border: '2px solid #333',
-          cursor: 'crosshair',
+          cursor: isWireMode ? 'crosshair' : 'default',
           backgroundColor: '#fafafa',
         }}
         data-testid="circuit-board-canvas"
       />
       <div className="mouse-position-display" style={{ marginTop: '8px', fontSize: '12px', color: '#666' }}>
         Mouse Position: ({mousePosition.x}, {mousePosition.y})
+        {isWireMode && <span style={{ marginLeft: '16px', color: '#007bff' }}>Wire Mode Active</span>}
       </div>
     </div>
   );

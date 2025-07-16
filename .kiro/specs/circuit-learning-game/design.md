@@ -21,7 +21,7 @@ The application follows a modern web architecture with clear separation of conce
 - **Database**: PostgreSQL with Prisma ORM
 - **Authentication**: JWT-based authentication
 - **Real-time Features**: WebSocket connections for multiplayer features (future)
-- **Testing**: Jest for unit tests, Cypress for E2E testing
+- **Testing**: Vitest for unit tests, Cypress for E2E testing
 
 ## Components and Interfaces
 
