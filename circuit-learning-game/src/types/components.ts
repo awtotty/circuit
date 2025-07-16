@@ -16,6 +16,7 @@ export interface IElectricalComponent {
   clone(): IElectricalComponent;
   getProperty<T>(key: string): T | undefined;
   setProperty(key: string, value: string | number | boolean): void;
+  getTerminals(): Terminal[];
 }
 
 export interface Terminal {
@@ -111,6 +112,10 @@ export abstract class BaseElectricalComponent implements IElectricalComponent {
 
   public setProperty(key: string, value: string | number | boolean): void {
     this.properties[key] = value;
+  }
+
+  public getTerminals(): Terminal[] {
+    return this.terminals;
   }
 
   protected createTerminal(
