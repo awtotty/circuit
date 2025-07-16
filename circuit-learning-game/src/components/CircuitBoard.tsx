@@ -1,13 +1,18 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import type { Position, ComponentType } from '../types';
+import type { IElectricalComponent } from '../types/components';
+import { ComponentRenderer, type RenderingContext } from '../services/ComponentRenderer';
 
 export interface CircuitBoardProps {
   width?: number;
   height?: number;
   gridSize?: number;
-  onCanvasClick?: (position: Position) => void;
+  components?: IElectricalComponent[];
+  onCanvasClick?: (position: Position, component?: IElectricalComponent) => void;
   onCanvasMouseMove?: (position: Position) => void;
   onComponentDrop?: (componentType: ComponentType, componentId: string, position: Position) => void;
+  onComponentSelect?: (componentId: string) => void;
+  onComponentDeselect?: (componentId: string) => void;
 }
 
 export interface GridCoordinates {
@@ -19,11 +24,15 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
   width = 800,
   height = 600,
   gridSize = 20,
+  components = [],
   onCanvasClick,
   onCanvasMouseMove,
   onComponentDrop,
+  onComponentSelect,
+  onComponentDeselect,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rendererRef = useRef<ComponentRenderer>(new ComponentRenderer());
   const [mousePosition, setMousePosition] = useState<Position>({ x: 0, y: 0 });
   const [isDragOver, setIsDragOver] = useState(false);
   const [dragPosition, setDragPosition] = useState<Position | null>(null);
@@ -120,10 +129,34 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
     const canvasPos = getCanvasMousePosition(event);
     const snappedPos = snapToGrid(canvasPos);
     
-    if (onCanvasClick) {
-      onCanvasClick(snappedPos);
+    // Check if click is on a component
+    const clickedComponent = rendererRef.current.getComponentAtPosition(components, canvasPos);
+    
+    if (clickedComponent) {
+      // Handle component selection
+      if (event.ctrlKey || event.metaKey) {
+        // Multi-select with Ctrl/Cmd
+        rendererRef.current.toggleSelection(clickedComponent.id);
+        if (rendererRef.current.isSelected(clickedComponent.id)) {
+          onComponentSelect?.(clickedComponent.id);
+        } else {
+          onComponentDeselect?.(clickedComponent.id);
+        }
+      } else {
+        // Single select
+        rendererRef.current.clearSelection();
+        rendererRef.current.selectComponent(clickedComponent.id);
+        onComponentSelect?.(clickedComponent.id);
+      }
+    } else {
+      // Click on empty space - clear selection
+      rendererRef.current.clearSelection();
     }
-  }, [getCanvasMousePosition, snapToGrid, onCanvasClick]);
+    
+    if (onCanvasClick) {
+      onCanvasClick(snappedPos, clickedComponent || undefined);
+    }
+  }, [getCanvasMousePosition, snapToGrid, onCanvasClick, components, onComponentSelect, onComponentDeselect]);
 
   // Handle mouse move
   const handleMouseMove = useCallback((event: MouseEvent) => {
@@ -198,6 +231,18 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
     setDragPosition(null);
   }, [getDragPosition, snapToGrid, onComponentDrop]);
 
+  // Handle mouse hover for component highlighting
+  const handleMouseHover = useCallback((event: MouseEvent) => {
+    const canvasPos = getCanvasMousePosition(event);
+    const hoveredComponent = rendererRef.current.getComponentAtPosition(components, canvasPos);
+    
+    if (hoveredComponent) {
+      rendererRef.current.setHighlighted(hoveredComponent.id);
+    } else {
+      rendererRef.current.setHighlighted(null);
+    }
+  }, [getCanvasMousePosition, components]);
+
   // Initialize canvas and event listeners
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -210,6 +255,15 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
     ctx.clearRect(0, 0, width, height);
     drawGrid(ctx);
 
+    // Render components
+    const renderingContext: RenderingContext = {
+      ctx,
+      gridSize,
+      scale: 1
+    };
+    
+    rendererRef.current.renderComponents(components, renderingContext);
+
     // Draw drop zone if dragging
     if (isDragOver && dragPosition) {
       drawDropZone(ctx, dragPosition);
@@ -218,6 +272,7 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
     // Add event listeners
     canvas.addEventListener('click', handleMouseClick);
     canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('mousemove', handleMouseHover);
     canvas.addEventListener('dragover', handleDragOver);
     canvas.addEventListener('dragenter', handleDragEnter);
     canvas.addEventListener('dragleave', handleDragLeave);
@@ -226,12 +281,13 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
     return () => {
       canvas.removeEventListener('click', handleMouseClick);
       canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('mousemove', handleMouseHover);
       canvas.removeEventListener('dragover', handleDragOver);
       canvas.removeEventListener('dragenter', handleDragEnter);
       canvas.removeEventListener('dragleave', handleDragLeave);
       canvas.removeEventListener('drop', handleDrop);
     };
-  }, [width, height, drawGrid, handleMouseClick, handleMouseMove, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, isDragOver, dragPosition, drawDropZone]);
+  }, [width, height, drawGrid, handleMouseClick, handleMouseMove, handleMouseHover, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, isDragOver, dragPosition, drawDropZone, components, gridSize]);
 
   return (
     <div className="circuit-board-container">
