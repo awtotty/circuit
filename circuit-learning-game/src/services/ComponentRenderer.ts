@@ -247,7 +247,7 @@ export class ComponentRenderer {
           ctx.fillRect(-20, -20, 40, 40);
         }
         
-        // LED body (triangle)
+        // LED body (triangle) - color changes based on state
         ctx.fillStyle = '#dc3545';
         ctx.strokeStyle = '#721c24';
         ctx.lineWidth = 2;
@@ -273,23 +273,6 @@ export class ComponentRenderer {
         ctx.moveTo(8, 0);
         ctx.lineTo(20, 0);
         ctx.stroke();
-        
-        // Light rays if LED is lit (check component properties)
-        // This would be enhanced with actual component state
-        ctx.strokeStyle = '#ffc107';
-        ctx.lineWidth = 1;
-        for (let i = 0; i < 6; i++) {
-          const angle = (i * Math.PI) / 3;
-          const x1 = Math.cos(angle) * 12;
-          const y1 = Math.sin(angle) * 12;
-          const x2 = Math.cos(angle) * 18;
-          const y2 = Math.sin(angle) * 18;
-          
-          ctx.beginPath();
-          ctx.moveTo(x1, y1);
-          ctx.lineTo(x2, y2);
-          ctx.stroke();
-        }
         
         ctx.restore();
       }

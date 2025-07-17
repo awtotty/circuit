@@ -74,7 +74,7 @@ describe('CircuitBoard', () => {
       const canvas = screen.getByTestId('circuit-board-canvas');
       expect(canvas).toHaveStyle({
         border: '2px solid #333',
-        cursor: 'crosshair',
+        cursor: 'default', // Default cursor when not in wire mode
         backgroundColor: '#fafafa',
       });
     });

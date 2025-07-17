@@ -3,6 +3,8 @@ import type { Position, ComponentType, Connection } from '../types';
 import type { IElectricalComponent } from '../types/components';
 import { ComponentRenderer, type RenderingContext } from '../services/ComponentRenderer';
 import { ConnectionManager, type ConnectionPoint } from '../services/ConnectionManager';
+import { CircuitSimulator, type SimulationResult } from '../services/CircuitSimulator';
+import { SimulationVisualizer, type VisualizationOptions } from '../services/SimulationVisualizer';
 
 export interface CircuitBoardProps {
   width?: number;
@@ -41,10 +43,23 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<ComponentRenderer>(new ComponentRenderer());
   const connectionManagerRef = useRef<ConnectionManager>(new ConnectionManager());
+  const simulatorRef = useRef<CircuitSimulator>(new CircuitSimulator());
+  const visualizerRef = useRef<SimulationVisualizer>(new SimulationVisualizer());
   const [mousePosition, setMousePosition] = useState<Position>({ x: 0, y: 0 });
   const [isDragOver, setIsDragOver] = useState(false);
   const [dragPosition, setDragPosition] = useState<Position | null>(null);
   const [isWireMode, setIsWireMode] = useState(false);
+  const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null);
+  const [isSimulationRunning, setIsSimulationRunning] = useState(false);
+  const [visualizationOptions, setVisualizationOptions] = useState<VisualizationOptions>({
+    showCurrentFlow: true,
+    showVoltageLabels: true,
+    showCurrentLabels: true,
+    showResistanceLabels: false,
+    particleCount: 10,
+    animationSpeed: 1.0,
+    particleSize: 3
+  });
 
   // Convert canvas coordinates to grid coordinates
   const canvasToGrid = useCallback((canvasPos: Position): GridCoordinates => {
@@ -323,6 +338,51 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
     }
   }, [getCanvasMousePosition, components]);
 
+  // Run circuit simulation
+  const runSimulation = useCallback(() => {
+    if (components.length === 0) {
+      setSimulationResult(null);
+      return;
+    }
+
+    const result = simulatorRef.current.simulate(components, connections);
+    setSimulationResult(result);
+    
+    // Update visualizer with new simulation results
+    if (result.isValid) {
+      visualizerRef.current.updateSimulation(result, components, connections);
+    }
+  }, [components, connections]);
+
+  // Toggle simulation running state
+  const toggleSimulation = useCallback(() => {
+    if (isSimulationRunning) {
+      visualizerRef.current.stopAnimation();
+      setIsSimulationRunning(false);
+    } else {
+      // Run simulation first
+      runSimulation();
+      
+      // Start animation with render callback
+      visualizerRef.current.startAnimation(() => {
+        // This will trigger a re-render of the canvas
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const event = new CustomEvent('visualizationUpdate');
+          canvas.dispatchEvent(event);
+        }
+      });
+      setIsSimulationRunning(true);
+    }
+  }, [isSimulationRunning, runSimulation]);
+
+  // Update visualization options
+  const updateVisualizationOptions = useCallback((newOptions: Partial<VisualizationOptions>) => {
+    const updatedOptions = { ...visualizationOptions, ...newOptions };
+    setVisualizationOptions(updatedOptions);
+    visualizerRef.current.updateOptions(updatedOptions);
+  }, [visualizationOptions]);
+
   // Initialize canvas and event listeners
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -350,10 +410,44 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
     // Draw wire preview if drawing
     drawWirePreview(ctx);
 
+    // Render simulation visualization if active
+    if (simulationResult && isSimulationRunning) {
+      visualizerRef.current.render(ctx, simulationResult, components, connections);
+    }
+
     // Draw drop zone if dragging
     if (isDragOver && dragPosition) {
       drawDropZone(ctx, dragPosition);
     }
+
+    // Handle visualization updates
+    const handleVisualizationUpdate = () => {
+      // Force re-render by updating a state or directly redrawing
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        // Clear and redraw everything
+        ctx.clearRect(0, 0, width, height);
+        drawGrid(ctx);
+        drawConnections(ctx);
+        
+        const renderingContext: RenderingContext = {
+          ctx,
+          gridSize,
+          scale: 1
+        };
+        
+        rendererRef.current.renderComponents(components, renderingContext);
+        drawWirePreview(ctx);
+        
+        if (simulationResult && isSimulationRunning) {
+          visualizerRef.current.render(ctx, simulationResult, components, connections);
+        }
+        
+        if (isDragOver && dragPosition) {
+          drawDropZone(ctx, dragPosition);
+        }
+      }
+    };
 
     // Add event listeners
     canvas.addEventListener('click', handleMouseClick);
@@ -363,6 +457,7 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
     canvas.addEventListener('dragenter', handleDragEnter);
     canvas.addEventListener('dragleave', handleDragLeave);
     canvas.addEventListener('drop', handleDrop);
+    canvas.addEventListener('visualizationUpdate', handleVisualizationUpdate);
 
     return () => {
       canvas.removeEventListener('click', handleMouseClick);
@@ -372,12 +467,13 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
       canvas.removeEventListener('dragenter', handleDragEnter);
       canvas.removeEventListener('dragleave', handleDragLeave);
       canvas.removeEventListener('drop', handleDrop);
+      canvas.removeEventListener('visualizationUpdate', handleVisualizationUpdate);
     };
   }, [width, height, drawGrid, drawConnections, drawWirePreview, handleMouseClick, handleMouseMove, handleMouseHover, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, isDragOver, dragPosition, drawDropZone, components, gridSize]);
 
   return (
     <div className="circuit-board-container">
-      <div className="circuit-board-controls" style={{ marginBottom: '8px' }}>
+      <div className="circuit-board-controls" style={{ marginBottom: '8px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
         <button
           onClick={() => setIsWireMode(!isWireMode)}
           style={{
@@ -393,6 +489,67 @@ export const CircuitBoard: React.FC<CircuitBoardProps> = ({
         >
           {isWireMode ? 'Exit Wire Mode' : 'Wire Mode'}
         </button>
+        
+        <button
+          onClick={toggleSimulation}
+          style={{
+            padding: '8px 16px',
+            backgroundColor: isSimulationRunning ? '#dc3545' : '#28a745',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '14px'
+          }}
+          data-testid="simulation-toggle"
+        >
+          {isSimulationRunning ? 'Stop Simulation' : 'Start Simulation'}
+        </button>
+        
+        <button
+          onClick={runSimulation}
+          disabled={isSimulationRunning}
+          style={{
+            padding: '8px 16px',
+            backgroundColor: isSimulationRunning ? '#6c757d' : '#17a2b8',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: isSimulationRunning ? 'not-allowed' : 'pointer',
+            fontSize: '14px'
+          }}
+          data-testid="run-simulation"
+        >
+          Run Once
+        </button>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <label style={{ fontSize: '12px', color: '#666' }}>Current Flow:</label>
+          <input
+            type="checkbox"
+            checked={visualizationOptions.showCurrentFlow}
+            onChange={(e) => updateVisualizationOptions({ showCurrentFlow: e.target.checked })}
+            data-testid="show-current-flow"
+          />
+        </div>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <label style={{ fontSize: '12px', color: '#666' }}>Labels:</label>
+          <input
+            type="checkbox"
+            checked={visualizationOptions.showVoltageLabels}
+            onChange={(e) => updateVisualizationOptions({ showVoltageLabels: e.target.checked })}
+            data-testid="show-voltage-labels"
+          />
+          <span style={{ fontSize: '11px', color: '#666' }}>V</span>
+          <input
+            type="checkbox"
+            checked={visualizationOptions.showCurrentLabels}
+            onChange={(e) => updateVisualizationOptions({ showCurrentLabels: e.target.checked })}
+            data-testid="show-current-labels"
+          />
+          <span style={{ fontSize: '11px', color: '#666' }}>I</span>
+        </div>
       </div>
       <canvas
         ref={canvasRef}
